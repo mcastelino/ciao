@@ -318,6 +318,14 @@ if [ -f $fedora_cloud_image ]; then
     ciao-cli image add --file $fedora_cloud_image --name "Fedorda Cloud Base 24-1.2" --id 73a86d7e-93c0-480e-9c41-ab42f69b7799
 fi
 
+if [ -f "$ciao_scripts"/xenial-k8s-master.img ]; then
+    ciao-cli image add --file "$ciao_scripts"/xenial-k8s-master.img --name "K8S Master" --id dddddddd-93c0-480e-9c41-ab42f69b7799
+fi
+
+if [ -f "$ciao_scripts"/xenial-k8s-worker.img ]; then
+    ciao-cli image add --file "$ciao_scripts"/xenial-k8s-worker.img --name "K8S Worker" --id eeeeeeee-93c0-480e-9c41-ab42f69b7799
+fi
+
 echo "---------------------------------------------------------------------------------------"
 echo ""
 echo "Your ciao development environment has been initialised."
