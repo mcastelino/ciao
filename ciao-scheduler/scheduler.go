@@ -482,7 +482,7 @@ func (sched *ssntpSchedulerServer) getCommandConcentratorUUID(command ssntp.Comm
 	}
 }
 
-func (sched *ssntpSchedulerServer) getConcentratorUUID(event ssntp.Event, payload []byte) (string, error) {
+func (sched *ssntpSchedulerServer) getEventConcentratorUUID(event ssntp.Event, payload []byte) (string, error) {
 	switch event {
 	default:
 		return "", fmt.Errorf("unsupported ssntp.Event type \"%s\"", event)
@@ -516,16 +516,16 @@ func (sched *ssntpSchedulerServer) fwdCmdToCNCI(command ssntp.Command, payload [
 
 func (sched *ssntpSchedulerServer) fwdEventToCNCI(event ssntp.Event, payload []byte) (dest ssntp.ForwardDestination) {
 	// since the scheduler is the primary ssntp server, it needs to
-	// unwrap event payloads and forward them to the approriate recipient
+	// unwrap CNCI directed event payloads and forward to the right CNCI
 
-	concentratorUUID, err := sched.getConcentratorUUID(event, payload)
+	concentratorUUID, err := sched.getEventConcentratorUUID(event, payload)
 	if err != nil || concentratorUUID == "" {
-		glog.Errorf("Bad %s event yaml from, concentratorUUID == %s\n", event, concentratorUUID)
+		glog.Errorf("Bad %s event yaml. Unable to forward to CNCI.\n", event)
 		dest.SetDecision(ssntp.Discard)
 		return
 	}
 
-	glog.V(2).Infof("Forwarding %s to %s\n", event.String(), concentratorUUID)
+	glog.V(2).Infof("Forwarding %s command to CNCI Agent%s\n", event.String(), concentratorUUID)
 	dest.AddRecipient(concentratorUUID)
 
 	return dest
