@@ -269,10 +269,11 @@ func (client *ssntpClient) RestartInstance(instanceID string, nodeID string) err
 
 func (client *ssntpClient) AssignFloatingIP(floatingIP payloads.FloatingIP) error {
 	floatingIPCmd := payloads.PublicIPCommand{
-		PublicIP:     floatingIP.AssignFloatingIP.Address,
-		PrivateIP:    floatingIP.AssignFloatingIP.InternalIP,
-		TenantUUID:   floatingIP.AssignFloatingIP.TenantUUID,
-		InstanceUUID: floatingIP.AssignFloatingIP.InstanceUUID,
+		PublicIP:         floatingIP.AssignFloatingIP.Address,
+		PrivateIP:        floatingIP.AssignFloatingIP.InternalIP,
+		TenantUUID:       floatingIP.AssignFloatingIP.TenantUUID,
+		InstanceUUID:     floatingIP.AssignFloatingIP.InstanceUUID,
+		ConcentratorUUID: floatingIP.AssignFloatingIP.ConcentratorUUID,
 	}
 
 	payload := payloads.CommandAssignPublicIP{

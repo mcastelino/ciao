@@ -546,6 +546,20 @@ func (ds *Datastore) removeTenantCNCI(tenantID string) error {
 	return ds.db.updateTenant(tenant)
 }
 
+// GetTenantCNCIAgentUUID fetches the ssntp.CNCIAGENT ssntp client uuid for a
+// specific tenant.
+func (ds *Datastore) GetTenantCNCIAgentUUID(tenantID string) (string, error) {
+	ds.tenantsLock.Lock()
+	defer ds.tenantsLock.Unlock()
+
+	tenant, ok := ds.tenants[tenantID]
+	if !ok {
+		return "", ErrNoTenant
+	}
+
+	return tenant.CNCIID, nil
+}
+
 func (ds *Datastore) getTenants() ([]*tenant, error) {
 	var tenants []*tenant
 

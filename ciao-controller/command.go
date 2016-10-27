@@ -88,7 +88,14 @@ func (c *controller) deleteInstance(instanceID string) error {
 
 func (c *controller) assignFloatingIP(floatingIP payloads.FloatingIP) error {
 	// validate the tenant exists
-	_, err := c.ds.GetTenant(floatingIP.AssignFloatingIP.TenantUUID)
+	tenantUUID := floatingIP.AssignFloatingIP.TenantUUID
+	_, err := c.ds.GetTenant(tenantUUID)
+	if err != nil {
+		return err
+	}
+
+	// obtain uuid of the ciao cnci agent
+	floatingIP.AssignFloatingIP.ConcentratorUUID, err = c.ds.GetTenantCNCIAgentUUID(tenantUUID)
 	if err != nil {
 		return err
 	}
