@@ -95,10 +95,11 @@ func (r PublicIPFailureReason) String() string {
 // FloatingIPDetails is the definition of the data required to assign a
 // floating ip to a given instance
 type FloatingIPDetails struct {
-	Address      string `json:"address"`
-	InternalIP   string `json:"fixed_address"`
-	TenantUUID   string
-	InstanceUUID string
+	Address          string `json:"address"`
+	InternalIP       string `json:"fixed_address"`
+	TenantUUID       string
+	InstanceUUID     string
+	ConcentratorUUID string
 }
 
 // FloatingIP represents a FloatingIPDetails
