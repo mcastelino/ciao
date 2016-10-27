@@ -470,6 +470,18 @@ func (sched *ssntpSchedulerServer) sendStartFailureError(clientUUID string, inst
 	glog.Warningf("Unable to dispatch: %v\n", reason)
 	sched.ssntp.SendError(clientUUID, ssntp.StartFailure, payload)
 }
+
+func (sched *ssntpSchedulerServer) getCommandConcentratorUUID(command ssntp.Command, payload []byte) (string, error) {
+	switch command {
+	default:
+		return "", fmt.Errorf("unsupported ssntp.Command type \"%s\"", command)
+	case ssntp.AssignPublicIP:
+		var cmd payloads.CommandAssignPublicIP
+		err := yaml.Unmarshal(payload, &cmd)
+		return cmd.AssignIP.ConcentratorUUID, err
+	}
+}
+
 func (sched *ssntpSchedulerServer) getConcentratorUUID(event ssntp.Event, payload []byte) (string, error) {
 	switch event {
 	default:
@@ -483,6 +495,23 @@ func (sched *ssntpSchedulerServer) getConcentratorUUID(event ssntp.Event, payloa
 		err := yaml.Unmarshal(payload, &ev)
 		return ev.TenantRemoved.ConcentratorUUID, err
 	}
+}
+
+func (sched *ssntpSchedulerServer) fwdCmdToCNCI(command ssntp.Command, payload []byte) (dest ssntp.ForwardDestination) {
+	// since the scheduler is the primary ssntp server, it needs to
+	// unwrap CNCI directed command payloads and forward to the right CNCI
+
+	concentratorUUID, err := sched.getCommandConcentratorUUID(command, payload)
+	if err != nil || concentratorUUID == "" {
+		glog.Errorf("Bad %s command yaml. Unable to forward to CNCI.\n", command)
+		dest.SetDecision(ssntp.Discard)
+		return
+	}
+
+	glog.V(2).Infof("Forwarding %s command to CNCI Agent %s\n", command.String(), concentratorUUID)
+	dest.AddRecipient(concentratorUUID)
+
+	return dest
 }
 
 func (sched *ssntpSchedulerServer) fwdEventToCNCI(event ssntp.Event, payload []byte) (dest ssntp.ForwardDestination) {
@@ -709,6 +738,9 @@ func (sched *ssntpSchedulerServer) CommandForward(controllerUUID string, command
 		fallthrough
 	case ssntp.EVACUATE:
 		dest, instanceUUID = sched.fwdCmdToComputeNode(command, payload)
+	case ssntp.AssignPublicIP:
+		dest = sched.fwdCmdToCNCI(command, payload)
+
 	default:
 		dest.SetDecision(ssntp.Discard)
 	}
@@ -1005,6 +1037,10 @@ func setSSNTPForwardRules(sched *ssntpSchedulerServer) {
 		},
 		{ // all DetachVolume command are processed by the Command forwarder
 			Operand:        ssntp.DetachVolume,
+			CommandForward: sched,
+		},
+		{ // all AssignPublicIP commands are processed by the Command forwarder
+			Operand:        ssntp.AssignPublicIP,
 			CommandForward: sched,
 		},
 	}
