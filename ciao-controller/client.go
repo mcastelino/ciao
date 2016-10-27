@@ -284,7 +284,7 @@ func (client *ssntpClient) AssignFloatingIP(floatingIP payloads.FloatingIP) erro
 		return err
 	}
 
-	glog.Info("Assing Floating IP %s to internal %s", floatingIP.AssignFloatingIP.Address, floatingIP.AssignFloatingIP.InternalIP)
+	glog.Info("Assign Floating IP %s to internal %s", floatingIP.AssignFloatingIP.Address, floatingIP.AssignFloatingIP.InternalIP)
 	glog.V(1).Info(string(y))
 
 	_, err = client.ssntp.SendCommand(ssntp.AssignPublicIP, y)
