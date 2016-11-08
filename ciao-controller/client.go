@@ -19,6 +19,7 @@ package main
 import (
 	"time"
 
+	"github.com/01org/ciao/ciao-controller/types"
 	"github.com/01org/ciao/payloads"
 	"github.com/01org/ciao/ssntp"
 	"github.com/golang/glog"
@@ -357,4 +358,52 @@ func (client *ssntpClient) detachVolume(volID string, instanceID string, nodeID 
 
 func (client *ssntpClient) Disconnect() {
 	client.ssntp.Close()
+}
+
+func (client *ssntpClient) mapExternalIP(t types.Tenant, m types.MappedIP) error {
+	payload := payloads.CommandAssignPublicIP{
+		AssignIP: payloads.PublicIPCommand{
+			ConcentratorUUID: t.CNCIID,
+			TenantUUID:       m.TenantID,
+			InstanceUUID:     m.InstanceID,
+			PublicIP:         m.ExternalIP,
+			PrivateIP:        m.InternalIP,
+			VnicMAC:          t.CNCIMAC,
+		},
+	}
+
+	y, err := yaml.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	glog.Infof("Request Map of %s to %s\n", m.ExternalIP, m.InternalIP)
+	glog.V(1).Info(string(y))
+
+	_, err = client.ssntp.SendCommand(ssntp.AssignPublicIP, y)
+	return err
+}
+
+func (client *ssntpClient) unMapExternalIP(t types.Tenant, m types.MappedIP) error {
+	payload := payloads.CommandReleasePublicIP{
+		ReleaseIP: payloads.PublicIPCommand{
+			ConcentratorUUID: t.CNCIID,
+			TenantUUID:       m.TenantID,
+			InstanceUUID:     m.InstanceID,
+			PublicIP:         m.ExternalIP,
+			PrivateIP:        m.InternalIP,
+			VnicMAC:          t.CNCIMAC,
+		},
+	}
+
+	y, err := yaml.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	glog.Infof("Request unmap of %s from %s\n", m.ExternalIP, m.InternalIP)
+	glog.V(1).Info(string(y))
+
+	_, err = client.ssntp.SendCommand(ssntp.ReleasePublicIP, y)
+	return err
 }

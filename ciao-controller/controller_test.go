@@ -23,6 +23,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -1367,6 +1368,274 @@ func TestListVolumesDetail(t *testing.T) {
 
 	if len(vols) != 1 {
 		t.Fatal("Incorrect number of volumes returned")
+	}
+}
+
+func testAddPool(t *testing.T, name string, subnet *string, ips []string) {
+	pool, err := ctl.AddPool(name, subnet, ips)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if pool.ID == "" {
+		t.Fatal("id not set")
+	}
+
+	expected := types.Pool{
+		ID:   pool.ID,
+		Name: name,
+	}
+
+	if subnet != nil {
+		if pool.Subnets[0].ID == "" {
+			t.Fatal("subnet id not created")
+		}
+
+		sub := types.ExternalSubnet{
+			ID:   pool.Subnets[0].ID,
+			CIDR: *subnet,
+		}
+
+		expected.Subnets = []types.ExternalSubnet{sub}
+
+		_, ipNet, err := net.ParseCIDR(*subnet)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ones, bits := ipNet.Mask.Size()
+		expected.TotalIPs = (1 << uint32(bits-ones))
+		expected.Free = expected.TotalIPs
+	} else if len(ips) > 0 {
+		// not an easy way to check this, so we're going to
+		// do some manual tests
+		if pool.TotalIPs != len(ips) ||
+			pool.Free != len(ips) ||
+			len(pool.IPs) != len(ips) {
+			t.Fatal("External IPs not handled correctly")
+		}
+		return
+	}
+
+	if reflect.DeepEqual(expected, pool) == false {
+		t.Fatalf("expected %v, got %v\n", expected, pool)
+	}
+}
+
+func deletePool(name string) error {
+	pools, err := ctl.ListPools()
+	if err != nil {
+		return err
+	}
+
+	if len(pools) < 1 {
+		return types.ErrPoolNotFound
+	}
+
+	for _, pool := range pools {
+		if pool.Name == name {
+			return ctl.DeletePool(pool.ID)
+		}
+	}
+
+	return types.ErrPoolNotFound
+}
+
+func TestAddPoolWithSubnet(t *testing.T) {
+	subnet := "192.168.0.0/16"
+	testAddPool(t, "test1", &subnet, []string{})
+	deletePool("test1")
+}
+
+func TestAddPoolWithIPs(t *testing.T) {
+	ips := []string{"10.10.0.1", "10.10.0.2"}
+	testAddPool(t, "test2", nil, ips)
+	deletePool("test2")
+}
+
+func TestAddPool(t *testing.T) {
+	testAddPool(t, "test3", nil, []string{})
+	deletePool("test3")
+}
+
+func TestListPools(t *testing.T) {
+	testAddPool(t, "listPoolTest", nil, []string{})
+
+	pools, err := ctl.ListPools()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(pools) < 1 {
+		t.Fatal("Unable to retrieve pools")
+	}
+
+	for _, pool := range pools {
+		if pool.Name == "listPoolTest" {
+			err := ctl.DeletePool(pool.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+	}
+
+	t.Fatal("Could not list pools")
+}
+
+func TestShowPool(t *testing.T) {
+	testAddPool(t, "showPoolTest", nil, []string{})
+
+	pools, err := ctl.ListPools()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(pools) < 1 {
+		t.Fatal("Unable to retrieve pools")
+	}
+
+	for _, pool := range pools {
+		if pool.Name == "showPoolTest" {
+			_, err := ctl.ShowPool(pool.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = ctl.DeletePool(pool.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			return
+		}
+	}
+
+	t.Fatal("Could not show pool")
+}
+
+func TestDeletePool(t *testing.T) {
+	testAddPool(t, "deletePoolTest", nil, []string{})
+
+	pools, err := ctl.ListPools()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(pools) < 1 {
+		t.Fatal("Unable to retrieve pools")
+	}
+
+	for _, pool := range pools {
+		if pool.Name == "deletePoolTest" {
+			err := ctl.DeletePool(pool.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, err = ctl.ShowPool(pool.ID)
+			if err != types.ErrPoolNotFound {
+				t.Fatal("Pool not deleted")
+			}
+			return
+		}
+	}
+
+	t.Fatal("Could not delete pool")
+}
+
+func TestAddPoolSubnet(t *testing.T) {
+	subnet := "192.168.0.0/24"
+
+	testAddPool(t, "addsubnet", nil, []string{})
+
+	pools, err := ctl.ListPools()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(pools) < 1 {
+		t.Fatal("Unable to retrieve pools")
+	}
+
+	for _, pool := range pools {
+		if pool.Name == "addsubnet" {
+			err := ctl.AddAddress(pool.ID, &subnet, []string{})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			p1, err := ctl.ShowPool(pool.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// we should have a our subnet.
+			if p1.Subnets[0].CIDR != subnet {
+				t.Fatalf("expectd %s subnet got %s", subnet, p1.Subnets[0].CIDR)
+			}
+
+			err = ctl.DeletePool(pool.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+	}
+
+}
+
+func TestMapAddress(t *testing.T) {
+	var reason payloads.StartFailureReason
+
+	client, instances := testStartWorkload(t, 1, false, reason)
+	defer client.Shutdown()
+
+	sendStatsCmd(client, t)
+
+	ips := []string{"10.10.0.1"}
+	poolName := "testmap"
+
+	testAddPool(t, poolName, nil, ips)
+
+	pools, err := ctl.ListPools()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(pools) < 1 {
+		t.Fatal("Unable to retrieve pools")
+	}
+
+	for _, pool := range pools {
+		if pool.Name == "testmap" {
+			if pool.Free != 1 {
+				t.Fatal("Pool Free not correct")
+			}
+		}
+	}
+
+	err = ctl.MapAddress(&poolName, instances[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pools, err = ctl.ListPools()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(pools) < 1 {
+		t.Fatal("Unable to retrieve pools")
+	}
+
+	for _, pool := range pools {
+		if pool.Name == "testmap" {
+			if pool.Free != 0 {
+				fmt.Printf("%v", pool)
+				t.Fatal("Pool Free not decremented")
+			}
+		}
 	}
 }
 

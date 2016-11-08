@@ -166,6 +166,12 @@ type Datastore struct {
 	attachLock      *sync.RWMutex
 	// maybe add a map[instanceid][]types.StorageAttachment
 	// to make retrieval of volumes faster.
+
+	pools           map[string]types.Pool
+	externalSubnets map[string]bool
+	externalIPs     map[string]bool
+	mappedIPs       map[string]types.MappedIP
+	poolsLock       *sync.RWMutex
 }
 
 // Init initializes the private data for the Datastore object.
@@ -282,6 +288,13 @@ func (ds *Datastore) Init(config Config) error {
 	}
 
 	ds.attachLock = &sync.RWMutex{}
+
+	// Add persistent storage later. For now we get an empty map.
+	ds.poolsLock = &sync.RWMutex{}
+	ds.pools = make(map[string]types.Pool)
+	ds.externalSubnets = make(map[string]bool)
+	ds.externalIPs = make(map[string]bool)
+	ds.mappedIPs = make(map[string]types.MappedIP)
 
 	return err
 }
@@ -1681,4 +1694,459 @@ func (ds *Datastore) GetVolumeAttachments(volume string) ([]types.StorageAttachm
 	ds.attachLock.RUnlock()
 
 	return attachments, nil
+}
+
+// GetPool will return an external IP Pool
+func (ds *Datastore) GetPool(ID string) (types.Pool, error) {
+	ds.poolsLock.RLock()
+	p, ok := ds.pools[ID]
+	ds.poolsLock.RUnlock()
+
+	if !ok {
+		return p, types.ErrPoolNotFound
+	}
+
+	return p, nil
+}
+
+// GetPools will return a list of external IP Pools
+func (ds *Datastore) GetPools() ([]types.Pool, error) {
+	var pools []types.Pool
+
+	ds.poolsLock.RLock()
+
+	for _, p := range ds.pools {
+		pools = append(pools, p)
+	}
+
+	ds.poolsLock.RUnlock()
+
+	return pools, nil
+}
+
+// lock for the map must be held by caller.
+func (ds *Datastore) isDuplicateSubnet(new *net.IPNet) bool {
+	for s, exists := range ds.externalSubnets {
+		if exists == true {
+			// this will always succeed
+			_, subnet, _ := net.ParseCIDR(s)
+
+			if subnet.Contains(new.IP) || new.Contains(subnet.IP) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// lock for the map must be held by the caller
+func (ds *Datastore) isDuplicateIP(new net.IP) bool {
+	// first make sure the IP isn't covered by a subnet
+	for s, exists := range ds.externalSubnets {
+		// this will always succeed
+		_, subnet, _ := net.ParseCIDR(s)
+
+		if exists == true {
+			if subnet.Contains(new) {
+				return true
+			}
+		}
+	}
+
+	// next make sure that the IP isn't already in a
+	// different pool
+	return ds.externalIPs[new.String()]
+}
+
+// AddPool will add a brand new pool to our datastore.
+func (ds *Datastore) AddPool(pool types.Pool) error {
+	ds.poolsLock.Lock()
+	defer ds.poolsLock.Unlock()
+
+	if len(pool.Subnets) > 0 {
+		// check each one to make sure it's not in use.
+		for _, subnet := range pool.Subnets {
+			_, newSubnet, err := net.ParseCIDR(subnet.CIDR)
+			if err != nil {
+				return err
+			}
+
+			if ds.isDuplicateSubnet(newSubnet) {
+				return types.ErrDuplicateSubnet
+			}
+
+			// update our list of used subnets
+			ds.externalSubnets[subnet.CIDR] = true
+		}
+	} else if len(pool.IPs) > 0 {
+		var newIPs []net.IP
+
+		// make sure valid and not duplicate
+		for _, newIP := range pool.IPs {
+			IP := net.ParseIP(newIP.Address)
+			if IP == nil {
+				return types.ErrInvalidIP
+			}
+
+			if ds.isDuplicateIP(IP) {
+				return types.ErrDuplicateIP
+			}
+
+			newIPs = append(newIPs, IP)
+		}
+
+		// now that the whole list is confirmed, we can update
+		for _, IP := range newIPs {
+			ds.externalIPs[IP.String()] = true
+		}
+	}
+
+	ds.pools[pool.ID] = pool
+
+	return nil
+}
+
+// DeletePool will delete an unused pool from our datastore.
+func (ds *Datastore) DeletePool(ID string) error {
+	ds.poolsLock.Lock()
+	defer ds.poolsLock.Unlock()
+
+	p, ok := ds.pools[ID]
+	if !ok {
+		return types.ErrPoolNotFound
+	}
+
+	// make sure all ips in this pool are not used.
+	if p.Free != p.TotalIPs {
+		return types.ErrPoolNotEmpty
+	}
+
+	// delete all subnets
+	for _, subnet := range p.Subnets {
+		delete(ds.externalSubnets, subnet.CIDR)
+	}
+
+	// delete any individual IPs
+	for _, IP := range p.IPs {
+		delete(ds.externalIPs, IP.Address)
+	}
+
+	// delete the whole pool
+	delete(ds.pools, ID)
+
+	return nil
+}
+
+// AddExternalSubnet will add a new subnet to an existing pool.
+func (ds *Datastore) AddExternalSubnet(poolID string, subnet string) error {
+	sub := types.ExternalSubnet{
+		ID:   uuid.Generate().String(),
+		CIDR: subnet,
+	}
+
+	_, ipNet, err := net.ParseCIDR(subnet)
+	if err != nil {
+		return err
+	}
+
+	ds.poolsLock.Lock()
+	defer ds.poolsLock.Unlock()
+
+	p, ok := ds.pools[poolID]
+	if !ok {
+		return types.ErrPoolNotFound
+	}
+
+	if ds.isDuplicateSubnet(ipNet) {
+		return types.ErrDuplicateSubnet
+	}
+
+	// we are committed now.
+	ds.externalSubnets[sub.CIDR] = true
+	ones, bits := ipNet.Mask.Size()
+	newIPs := (1 << uint32(bits-ones))
+	p.TotalIPs += newIPs
+	p.Free += newIPs
+	p.Subnets = append(p.Subnets, sub)
+	ds.pools[poolID] = p
+
+	return nil
+}
+
+// AddExternalIPs will add a list of individual IPs to an existing pool.
+func (ds *Datastore) AddExternalIPs(poolID string, IPs []string) error {
+	var newIPs []net.IP
+
+	ds.poolsLock.Lock()
+	defer ds.poolsLock.Unlock()
+
+	// make sure valid and not duplicate
+	for _, newIP := range IPs {
+		IP := net.ParseIP(newIP)
+		if IP == nil {
+			return types.ErrInvalidIP
+		}
+
+		if ds.isDuplicateIP(IP) {
+			return types.ErrDuplicateIP
+		}
+
+		newIPs = append(newIPs, IP)
+	}
+	for _, i := range IPs {
+		addr := net.ParseIP(i)
+		if addr == nil {
+			return types.ErrInvalidIP
+		}
+	}
+
+	p, ok := ds.pools[poolID]
+	if !ok {
+		return types.ErrPoolNotFound
+	}
+
+	// now that the whole list is confirmed, we can update
+	for _, IP := range newIPs {
+		ds.externalIPs[IP.String()] = true
+
+		ExtIP := types.ExternalIP{
+			ID:      uuid.Generate().String(),
+			Address: IP.String(),
+		}
+
+		p.TotalIPs++
+		p.Free++
+
+		p.IPs = append(p.IPs, ExtIP)
+	}
+
+	ds.pools[poolID] = p
+
+	return nil
+}
+
+// DeleteSubnet will remove an unused subnet from an existing pool.
+func (ds *Datastore) DeleteSubnet(poolID string, subnetID string) error {
+	ds.poolsLock.Lock()
+	defer ds.poolsLock.Unlock()
+
+	p, ok := ds.pools[poolID]
+	if !ok {
+		return types.ErrPoolNotFound
+	}
+
+	for i, sub := range p.Subnets {
+		if sub.ID != subnetID {
+			continue
+		}
+
+		IP, ipNet, err := net.ParseCIDR(sub.CIDR)
+		if err != nil {
+			return err
+		}
+
+		// check each address in this subnet is not mapped.
+		for IP := IP.Mask(ipNet.Mask); ipNet.Contains(IP); incrementIP(IP) {
+			_, ok := ds.mappedIPs[IP.String()]
+			if ok {
+				return types.ErrPoolNotEmpty
+			}
+		}
+
+		ones, bits := ipNet.Mask.Size()
+		numIPs := (1 << uint32(bits-ones))
+		p.TotalIPs -= numIPs
+		p.Free -= numIPs
+
+		p.Subnets = append(p.Subnets[:i], p.Subnets[i+1:]...)
+
+		delete(ds.externalSubnets, sub.CIDR)
+
+		ds.pools[poolID] = p
+
+		return nil
+	}
+
+	return types.ErrInvalidPoolAddress
+}
+
+// DeleteExternalIP will remove an individual IP address from a pool.
+func (ds *Datastore) DeleteExternalIP(poolID string, addrID string) error {
+	ds.poolsLock.Lock()
+	defer ds.poolsLock.Unlock()
+
+	p, ok := ds.pools[poolID]
+	if !ok {
+		return types.ErrPoolNotFound
+	}
+
+	for i, extIP := range p.IPs {
+		if extIP.ID != addrID {
+			continue
+		}
+
+		// check address is not mapped.
+		_, ok := ds.mappedIPs[extIP.Address]
+		if ok {
+			return types.ErrPoolNotEmpty
+		}
+
+		p.TotalIPs--
+		p.Free--
+
+		p.IPs = append(p.IPs[:i], p.IPs[i+1:]...)
+
+		delete(ds.externalIPs, extIP.Address)
+
+		ds.pools[poolID] = p
+
+		return nil
+	}
+
+	return types.ErrInvalidPoolAddress
+}
+
+func incrementIP(IP net.IP) {
+	for i := len(IP) - 1; i >= 0; i-- {
+		IP[i]++
+		if IP[i] > 0 {
+			break
+		}
+	}
+}
+
+// GetMappedIPs will return a list of mapped external IPs by tenant.
+func (ds *Datastore) GetMappedIPs(tenant *string) []types.MappedIP {
+	var mappedIPs []types.MappedIP
+
+	ds.poolsLock.RLock()
+	defer ds.poolsLock.RUnlock()
+
+	for _, m := range ds.mappedIPs {
+		if tenant != nil {
+			if m.TenantID != *tenant {
+				continue
+			}
+		}
+		mappedIPs = append(mappedIPs, m)
+	}
+
+	return mappedIPs
+}
+
+// GetMappedIP will return a MappedIP struct for the given address.
+func (ds *Datastore) GetMappedIP(address string) (types.MappedIP, error) {
+	ds.poolsLock.RLock()
+	defer ds.poolsLock.RUnlock()
+
+	m, ok := ds.mappedIPs[address]
+	if !ok {
+		return types.MappedIP{}, types.ErrAddressNotFound
+	}
+
+	return m, nil
+}
+
+// MapExternalIP will allocate an external IP to an instance from a given pool.
+func (ds *Datastore) MapExternalIP(poolID string, instanceID string) (types.MappedIP, error) {
+	var m types.MappedIP
+
+	instance, err := ds.GetInstance(instanceID)
+	if err != nil {
+		return m, err
+	}
+
+	ds.poolsLock.Lock()
+	defer ds.poolsLock.Unlock()
+
+	pool, ok := ds.pools[poolID]
+	if !ok {
+		return m, types.ErrPoolNotFound
+	}
+
+	if pool.Free == 0 {
+		return m, types.ErrPoolEmpty
+	}
+
+	// find a free IP address in any subnet.
+	for _, sub := range pool.Subnets {
+		IP, ipNet, err := net.ParseCIDR(sub.CIDR)
+		if err != nil {
+			return m, err
+		}
+
+		// check each address in this subnet
+		for IP := IP.Mask(ipNet.Mask); ipNet.Contains(IP); incrementIP(IP) {
+			_, ok := ds.mappedIPs[IP.String()]
+			if !ok {
+				m.ID = uuid.Generate().String()
+				m.ExternalIP = IP.String()
+				m.InternalIP = instance.IPAddress
+				m.InstanceID = instanceID
+				m.TenantID = instance.TenantID
+				m.PoolID = pool.ID
+				m.PoolName = pool.Name
+
+				ds.mappedIPs[IP.String()] = m
+
+				pool.Free--
+
+				ds.pools[poolID] = pool
+
+				return m, nil
+			}
+		}
+	}
+
+	// we are still looking. Check our individual IPs
+	for _, IP := range pool.IPs {
+		_, ok := ds.mappedIPs[IP.Address]
+		if !ok {
+			m.ID = uuid.Generate().String()
+			m.ExternalIP = IP.Address
+			m.InternalIP = instance.IPAddress
+			m.InstanceID = instanceID
+			m.TenantID = instance.TenantID
+			m.PoolID = pool.ID
+			m.PoolName = pool.Name
+
+			ds.mappedIPs[IP.Address] = m
+
+			pool.Free--
+
+			ds.pools[poolID] = pool
+
+			return m, nil
+		}
+	}
+
+	// if you got here you are out of luck. But you never should.
+	glog.Errorf("Pool reports %d free addresses but none found\n", pool.Free)
+	return m, types.ErrPoolEmpty
+}
+
+// UnMapExternalIP will stop associating a given address with an instance.
+func (ds *Datastore) UnMapExternalIP(address string) error {
+	ds.poolsLock.Lock()
+	defer ds.poolsLock.Unlock()
+
+	m, ok := ds.mappedIPs[address]
+	if !ok {
+		return types.ErrAddressNotFound
+	}
+
+	// get pool and update Free
+	pool, ok := ds.pools[m.PoolID]
+	if !ok {
+		return types.ErrPoolNotFound
+	}
+
+	pool.Free++
+	ds.pools[pool.ID] = pool
+
+	// get Address and dealloc.
+	delete(ds.mappedIPs, address)
+
+	return nil
 }
