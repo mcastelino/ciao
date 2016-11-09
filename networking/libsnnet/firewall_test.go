@@ -32,13 +32,13 @@ func fwinit() {
 	fwIf = os.Getenv("FWIF_ENV")
 
 	if fwIf == "" {
-		fwIf = "eth0"
+		fwIf = "extdummy"
 	}
 
 	fwIfInt = os.Getenv("FWIFINT_ENV")
 
 	if fwIfInt == "" {
-		fwIfInt = "eth1"
+		fwIfInt = "testdummy"
 	}
 }
 
@@ -69,11 +69,11 @@ func TestFw_Ssh(t *testing.T) {
 	require.Nil(t, err)
 
 	err = fw.ExtPortAccess(FwEnable, "tcp", fwIf, 12345,
-		net.ParseIP("192.168.0.101"), 22)
+		net.ParseIP("192.51.100.101"), 22)
 	assert.Nil(err)
 
 	err = fw.ExtPortAccess(FwDisable, "tcp", fwIf, 12345,
-		net.ParseIP("192.168.0.101"), 22)
+		net.ParseIP("192.51.100.101"), 22)
 	assert.Nil(err)
 
 	err = fw.ShutdownFirewall()
@@ -117,8 +117,8 @@ func TestFw_PublicIP(t *testing.T) {
 		t.Fatalf("Error: InitFirewall %v %v %v", fwIf, err, fw)
 	}
 
-	intIP := net.ParseIP("192.168.0.101")
-	pubIP := net.ParseIP("192.168.0.131")
+	intIP := net.ParseIP("198.51.100.1")
+	pubIP := net.ParseIP("198.51.100.100")
 
 	err = fw.PublicIPAccess(FwEnable, intIP, pubIP, fwIfInt)
 	if err != nil {
@@ -156,7 +156,7 @@ func TestFw_All(t *testing.T) {
 	assert.Nil(err)
 
 	err = fw.ExtPortAccess(FwEnable, "tcp", fwIf, 12345,
-		net.ParseIP("192.168.0.101"), 22)
+		net.ParseIP("192.51.100.101"), 22)
 	assert.Nil(err)
 
 	procIPFwd := "/proc/sys/net/ipv4/ip_forward"
@@ -168,10 +168,10 @@ func TestFw_All(t *testing.T) {
 	}
 
 	err = fw.ExtPortAccess(FwDisable, "tcp", fwIf, 12345,
-		net.ParseIP("192.168.0.101"), 22)
+		net.ParseIP("192.51.100.101"), 22)
 	assert.Nil(err)
 
-	_, err = DebugSSHPortForIP(net.ParseIP("192.168.1.101"))
+	_, err = DebugSSHPortForIP(net.ParseIP("192.51.100.102"))
 	assert.Nil(err)
 
 	table := DumpIPTables()
