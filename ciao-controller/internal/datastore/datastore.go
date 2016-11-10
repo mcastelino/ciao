@@ -126,6 +126,24 @@ type persistentStore interface {
 	createStorageAttachment(a types.StorageAttachment) error
 	getAllStorageAttachments() (map[string]types.StorageAttachment, error)
 	deleteStorageAttachment(ID string) error
+
+	// external IP interfaces
+	createPool(pool types.Pool) error
+	updatePool(pool types.Pool) error
+	getAllPools() map[string]types.Pool
+	deletePool(ID string) error
+
+	createSubnet(subnet types.ExternalSubnet, poolID string) error
+	deleteSubnet(ID string) error
+	getPoolSubnets(poolID string) ([]types.ExternalSubnet, error)
+
+	createAddress(IP types.ExternalIP, poolID string) error
+	deleteAddress(ID string) error
+	getPoolAddresses(poolID string) ([]types.ExternalIP, error)
+
+	createMappedIP(m types.MappedIP) error
+	deleteMappedIP(ID string) error
+	getMappedIPs() map[string]types.MappedIP
 }
 
 // Datastore provides context for the datastore package.
@@ -172,6 +190,26 @@ type Datastore struct {
 	externalIPs     map[string]bool
 	mappedIPs       map[string]types.MappedIP
 	poolsLock       *sync.RWMutex
+}
+
+func (ds *Datastore) initExternalIPs() {
+	ds.poolsLock = &sync.RWMutex{}
+	ds.externalSubnets = make(map[string]bool)
+	ds.externalIPs = make(map[string]bool)
+
+	ds.pools = ds.db.getAllPools()
+
+	for _, pool := range ds.pools {
+		for _, subnet := range pool.Subnets {
+			ds.externalSubnets[subnet.CIDR] = true
+		}
+
+		for _, IP := range pool.IPs {
+			ds.externalIPs[IP.Address] = true
+		}
+	}
+
+	ds.mappedIPs = ds.db.getMappedIPs()
 }
 
 // Init initializes the private data for the Datastore object.
@@ -289,12 +327,7 @@ func (ds *Datastore) Init(config Config) error {
 
 	ds.attachLock = &sync.RWMutex{}
 
-	// Add persistent storage later. For now we get an empty map.
-	ds.poolsLock = &sync.RWMutex{}
-	ds.pools = make(map[string]types.Pool)
-	ds.externalSubnets = make(map[string]bool)
-	ds.externalIPs = make(map[string]bool)
-	ds.mappedIPs = make(map[string]types.MappedIP)
+	ds.initExternalIPs()
 
 	return err
 }
@@ -1803,8 +1836,13 @@ func (ds *Datastore) AddPool(pool types.Pool) error {
 	}
 
 	ds.pools[pool.ID] = pool
+	err := ds.db.createPool(pool)
+	if err != nil {
+		ds.poolsLock.Unlock()
+		ds.DeletePool(pool.ID)
+	}
 
-	return nil
+	return err
 }
 
 // DeletePool will delete an unused pool from our datastore.
@@ -1822,6 +1860,12 @@ func (ds *Datastore) DeletePool(ID string) error {
 		return types.ErrPoolNotEmpty
 	}
 
+	// delete from persistent store
+	err := ds.db.deletePool(ID)
+	if err != nil {
+		return err
+	}
+
 	// delete all subnets
 	for _, subnet := range p.Subnets {
 		delete(ds.externalSubnets, subnet.CIDR)
@@ -1835,7 +1879,7 @@ func (ds *Datastore) DeletePool(ID string) error {
 	// delete the whole pool
 	delete(ds.pools, ID)
 
-	return nil
+	return err
 }
 
 // AddExternalSubnet will add a new subnet to an existing pool.
@@ -1862,14 +1906,27 @@ func (ds *Datastore) AddExternalSubnet(poolID string, subnet string) error {
 		return types.ErrDuplicateSubnet
 	}
 
-	// we are committed now.
-	ds.externalSubnets[sub.CIDR] = true
 	ones, bits := ipNet.Mask.Size()
 	newIPs := (1 << uint32(bits-ones))
 	p.TotalIPs += newIPs
 	p.Free += newIPs
 	p.Subnets = append(p.Subnets, sub)
+
+	// update persistent store
+	err = ds.db.createSubnet(sub, p.ID)
+	if err != nil {
+		return err
+	}
+
+	err = ds.db.updatePool(p)
+	if err != nil {
+		_ = ds.db.deleteSubnet(sub.ID)
+		return err
+	}
+
+	// we are committed now.
 	ds.pools[poolID] = p
+	ds.externalSubnets[sub.CIDR] = true
 
 	return nil
 }
@@ -1894,12 +1951,6 @@ func (ds *Datastore) AddExternalIPs(poolID string, IPs []string) error {
 
 		newIPs = append(newIPs, IP)
 	}
-	for _, i := range IPs {
-		addr := net.ParseIP(i)
-		if addr == nil {
-			return types.ErrInvalidIP
-		}
-	}
 
 	p, ok := ds.pools[poolID]
 	if !ok {
@@ -1908,20 +1959,31 @@ func (ds *Datastore) AddExternalIPs(poolID string, IPs []string) error {
 
 	// now that the whole list is confirmed, we can update
 	for _, IP := range newIPs {
-		ds.externalIPs[IP.String()] = true
-
 		ExtIP := types.ExternalIP{
 			ID:      uuid.Generate().String(),
 			Address: IP.String(),
 		}
 
+		err := ds.db.createAddress(ExtIP, p.ID)
+		if err != nil {
+			return err
+		}
+
 		p.TotalIPs++
 		p.Free++
-
 		p.IPs = append(p.IPs, ExtIP)
-	}
 
-	ds.pools[poolID] = p
+		// yes, we are updating multiple times just to be safe
+		err = ds.db.updatePool(p)
+		if err != nil {
+			_ = ds.db.deleteAddress(ExtIP.ID)
+			return err
+		}
+
+		// willing to cache the results now.
+		ds.externalIPs[IP.String()] = true
+		ds.pools[poolID] = p
+	}
 
 	return nil
 }
@@ -1961,8 +2023,19 @@ func (ds *Datastore) DeleteSubnet(poolID string, subnetID string) error {
 
 		p.Subnets = append(p.Subnets[:i], p.Subnets[i+1:]...)
 
-		delete(ds.externalSubnets, sub.CIDR)
+		err = ds.db.deleteSubnet(sub.ID)
+		if err != nil {
+			return err
+		}
 
+		// yes, we are updating multiple times just to be safe
+		err = ds.db.updatePool(p)
+		if err != nil {
+			// not putting it back....
+			glog.V(2).Info(err)
+		}
+
+		delete(ds.externalSubnets, sub.CIDR)
 		ds.pools[poolID] = p
 
 		return nil
@@ -1996,6 +2069,18 @@ func (ds *Datastore) DeleteExternalIP(poolID string, addrID string) error {
 		p.Free--
 
 		p.IPs = append(p.IPs[:i], p.IPs[i+1:]...)
+
+		err := ds.db.deleteAddress(extIP.ID)
+		if err != nil {
+			return err
+		}
+
+		// yes, we are updating multiple times just to be safe
+		err = ds.db.updatePool(p)
+		if err != nil {
+			// not putting it back....
+			glog.V(2).Info(err)
+		}
 
 		delete(ds.externalIPs, extIP.Address)
 
@@ -2094,6 +2179,12 @@ func (ds *Datastore) MapExternalIP(poolID string, instanceID string) (types.Mapp
 
 				ds.pools[poolID] = pool
 
+				err = ds.db.updatePool(pool)
+				if err != nil {
+					// not putting it back....
+					glog.V(2).Info(err)
+				}
+
 				return m, nil
 			}
 		}
@@ -2116,6 +2207,11 @@ func (ds *Datastore) MapExternalIP(poolID string, instanceID string) (types.Mapp
 			pool.Free--
 
 			ds.pools[poolID] = pool
+			err = ds.db.updatePool(pool)
+			if err != nil {
+				// not putting it back....
+				glog.V(2).Info(err)
+			}
 
 			return m, nil
 		}
@@ -2147,6 +2243,11 @@ func (ds *Datastore) UnMapExternalIP(address string) error {
 
 	// get Address and dealloc.
 	delete(ds.mappedIPs, address)
+
+	err := ds.db.updatePool(pool)
+	if err != nil {
+		glog.V(2).Info(err)
+	}
 
 	return nil
 }

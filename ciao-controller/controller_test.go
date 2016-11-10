@@ -1236,6 +1236,8 @@ func TestStorageConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	wls[0].Storage = nil
 }
 
 func createTestVolume(tenantID string, size int, t *testing.T) string {
@@ -1590,8 +1592,6 @@ func TestMapAddress(t *testing.T) {
 
 	client, instances := testStartWorkload(t, 1, false, reason)
 	defer client.Shutdown()
-
-	sendStatsCmd(client, t)
 
 	ips := []string{"10.10.0.1"}
 	poolName := "testmap"
