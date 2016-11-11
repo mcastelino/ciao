@@ -2531,43 +2531,134 @@ func (ds *sqliteDB) deleteStorageAttachment(ID string) error {
 	return err
 }
 
+// this is here just for readability.
 func (ds *sqliteDB) createPool(pool types.Pool) error {
-	datastore := ds.getTableDB("pools")
+	return ds.updatePool(pool)
+}
 
-	ds.dbLock.Lock()
-	defer ds.dbLock.Unlock()
-
-	tx, err := datastore.Begin()
+// lock must be held by caller. Any rollbacks will need to be handled
+// by caller.
+func (ds *sqliteDB) updateSubnets(tx *sql.Tx, pool types.Pool) error {
+	// get currently known subnets.
+	subnets, err := ds.getPoolSubnets(pool.ID)
 	if err != nil {
+		// TBD: what about row not found?
 		return err
 	}
 
-	_, err = tx.Exec("INSERT INTO pools (id, name, free, total) VALUES (?, ?, ?, ?)", pool.ID, pool.Name, pool.Free, pool.TotalIPs)
-	if err != nil {
-		tx.Rollback()
-		return err
+	// make a map of pool subnets by ID
+	subMap := make(map[string]bool)
+	for _, sub := range pool.Subnets {
+		subMap[sub.ID] = true
 	}
 
-	tx.Commit()
+	// do we have any subnets that need deleting?
+	for _, sub := range subnets {
+		_, ok := subMap[sub.ID]
+		if !ok {
+			_, err = tx.Exec("DELETE FROM subnet_pool WHERE id = ?", sub.ID)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// any subnets that already exist in the table will be ignored,
+	// new ones will be added.
+	for _, subnet := range pool.Subnets {
+		_, err = tx.Exec("INSERT OR IGNORE INTO subnet_pool (id, pool_id, cidr) VALUES (?, ?, ?)", subnet.ID, pool.ID, subnet.CIDR)
+		if err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
 
+// lock must be held by caller. Any rollbacks will need to be handled
+// by caller.
+func (ds *sqliteDB) updateAddresses(tx *sql.Tx, pool types.Pool) error {
+	// get currently known individual addresses.
+	addresses, err := ds.getPoolAddresses(pool.ID)
+	if err != nil {
+		// TBD: what about row not found?
+		return err
+	}
+
+	// make a map of pool addresses by ID
+	addrMap := make(map[string]bool)
+	for _, addr := range pool.IPs {
+		addrMap[addr.ID] = true
+	}
+
+	// do we have any individual IPs that need deleting?
+	for _, addr := range addresses {
+		_, ok := addrMap[addr.ID]
+		if !ok {
+			_, err = tx.Exec("DELETE FROM address_pool WHERE id = ?", addr.ID)
+			if err != nil {
+				tx.Rollback()
+				return err
+			}
+		}
+	}
+
+	// any addresses that already exist in the table will be ignored,
+	// new ones will be added.
+	for _, IP := range pool.IPs {
+		_, err = tx.Exec("INSERT OR IGNORE INTO address_pool (id, pool_id, address) VALUES (?, ?, ?)", IP.ID, pool.ID, IP.Address)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+
+	return nil
+}
+
+// updatePool is used to update all pool related fields even if they
+// are in different tables.
 func (ds *sqliteDB) updatePool(pool types.Pool) error {
 	datastore := ds.getTableDB("pools")
 
 	ds.dbLock.Lock()
 	defer ds.dbLock.Unlock()
 
+	pools := ds.getAllPools()
+
+	// do the below as a single transaction.
 	tx, err := datastore.Begin()
 	if err != nil {
 		return err
 	}
 
-	_, err = tx.Exec("UPDATE pools SET free = ?, total = ? WHERE id = ?", pool.Free, pool.TotalIPs, pool.ID)
+	err = ds.updateSubnets(tx, pool)
 	if err != nil {
 		tx.Rollback()
 		return err
+	}
+
+	err = ds.updateAddresses(tx, pool)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	// if this is a new pool, put it in, otherwise just update.
+	_, ok := pools[pool.ID]
+	if !ok {
+		_, err = tx.Exec("INSERT INTO pools (id, name, free, total) VALUES (?, ?, ?, ?)", pool.ID, pool.Name, pool.Free, pool.TotalIPs)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+	} else {
+		// update free and total counts.
+		_, err = tx.Exec("UPDATE pools SET free = ?, total = ? WHERE id = ?", pool.Free, pool.TotalIPs, pool.ID)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
 	}
 
 	tx.Commit()
@@ -2670,50 +2761,6 @@ func (ds *sqliteDB) deletePool(ID string) error {
 	return err
 }
 
-func (ds *sqliteDB) createSubnet(subnet types.ExternalSubnet, poolID string) error {
-	datastore := ds.getTableDB("subnet_pool")
-
-	ds.dbLock.Lock()
-	defer ds.dbLock.Unlock()
-
-	tx, err := datastore.Begin()
-	if err != nil {
-		return err
-	}
-
-	_, err = tx.Exec("INSERT INTO subnet_pool (id, pool_id, cidr) VALUES (?, ?, ?)", subnet.ID, poolID, subnet.CIDR)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-
-	tx.Commit()
-
-	return nil
-}
-
-func (ds *sqliteDB) deleteSubnet(ID string) error {
-	datastore := ds.getTableDB("subnet_pool")
-
-	ds.dbLock.Lock()
-	defer ds.dbLock.Unlock()
-
-	tx, err := datastore.Begin()
-	if err != nil {
-		return err
-	}
-
-	_, err = tx.Exec("DELETE FROM subnet_pool WHERE id = ?", ID)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-
-	tx.Commit()
-
-	return err
-}
-
 func (ds *sqliteDB) getPoolSubnets(poolID string) ([]types.ExternalSubnet, error) {
 	var subnets []types.ExternalSubnet
 
@@ -2746,50 +2793,6 @@ func (ds *sqliteDB) getPoolSubnets(poolID string) ([]types.ExternalSubnet, error
 	}
 
 	return subnets, nil
-}
-
-func (ds *sqliteDB) createAddress(IP types.ExternalIP, poolID string) error {
-	datastore := ds.getTableDB("address_pool")
-
-	ds.dbLock.Lock()
-	defer ds.dbLock.Unlock()
-
-	tx, err := datastore.Begin()
-	if err != nil {
-		return err
-	}
-
-	_, err = tx.Exec("INSERT INTO address_pool (id, pool_id, address) VALUES (?, ?, ?)", IP.ID, poolID, IP.Address)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-
-	tx.Commit()
-
-	return nil
-}
-
-func (ds *sqliteDB) deleteAddress(ID string) error {
-	datastore := ds.getTableDB("address_pool")
-
-	ds.dbLock.Lock()
-	defer ds.dbLock.Unlock()
-
-	tx, err := datastore.Begin()
-	if err != nil {
-		return err
-	}
-
-	_, err = tx.Exec("DELETE FROM address_pool WHERE id = ?", ID)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-
-	tx.Commit()
-
-	return err
 }
 
 func (ds *sqliteDB) getPoolAddresses(poolID string) ([]types.ExternalIP, error) {

@@ -449,23 +449,35 @@ func TestCreateSubnet(t *testing.T) {
 		Name: "test",
 	}
 
-	subnet := types.ExternalSubnet{
-		ID:   uuid.Generate().String(),
-		CIDR: "192.168.0.0/24",
-	}
-
 	err = db.createPool(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = db.createSubnet(subnet, pool.ID)
+	subnet := types.ExternalSubnet{
+		ID:   uuid.Generate().String(),
+		CIDR: "192.168.0.0/24",
+	}
+
+	pool.Subnets = append(pool.Subnets, subnet)
+
+	err = db.updatePool(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	subs, err := db.getPoolSubnets(pool.ID)
-	if err != nil || len(subs) != 1 {
+	pools := db.getAllPools()
+	if pools == nil {
+		t.Fatal("pool not stored")
+	}
+
+	p, ok := pools[pool.ID]
+	if !ok || (p.Name != "test") {
+		t.Fatal("pool not stored")
+	}
+
+	subs := p.Subnets
+	if len(subs) != 1 {
 		t.Fatal("subnet not saved")
 	}
 
@@ -497,24 +509,32 @@ func TestDeleteSubnet(t *testing.T) {
 		CIDR: "192.168.0.0/24",
 	}
 
+	pool.Subnets = append(pool.Subnets, subnet)
+
 	err = db.createPool(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = db.createSubnet(subnet, pool.ID)
+	pool.Subnets = []types.ExternalSubnet{}
+	err = db.updatePool(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	subs, err := db.getPoolSubnets(pool.ID)
-	if err != nil || len(subs) != 1 {
-		t.Fatal("subnet not saved")
+	pools := db.getAllPools()
+	if pools == nil {
+		t.Fatal("pool not stored")
 	}
 
-	err = db.deleteSubnet(subnet.ID)
-	if err != nil {
-		t.Fatal(err)
+	p, ok := pools[pool.ID]
+	if !ok || (p.Name != "test") {
+		t.Fatal("pool not stored")
+	}
+
+	subs := p.Subnets
+	if len(subs) != 0 {
+		t.Fatal("subnet not deleted")
 	}
 
 	db.disconnect()
@@ -541,16 +561,26 @@ func TestCreateAddress(t *testing.T) {
 		Address: "192.168.0.1",
 	}
 
-	err = db.createAddress(IP, pool.ID)
+	pool.IPs = append(pool.IPs, IP)
+
+	err = db.createPool(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	addrs, err := db.getPoolAddresses(pool.ID)
-	if err != nil || len(addrs) != 1 {
-		if addrs[0].ID != IP.ID || addrs[0].Address != IP.Address {
-			t.Fatal("address not stored correctly")
-		}
+	pools := db.getAllPools()
+	if pools == nil {
+		t.Fatal("pool not stored")
+	}
+
+	p, ok := pools[pool.ID]
+	if !ok || (p.Name != "test") {
+		t.Fatal("pool not stored")
+	}
+
+	addrs := p.IPs
+	if len(addrs) != 1 || addrs[0].ID != IP.ID || addrs[0].Address != IP.Address {
+		t.Fatal("address not stored correctly")
 	}
 
 	db.disconnect()
@@ -577,25 +607,32 @@ func TestDeleteAddress(t *testing.T) {
 		Address: "192.168.0.1",
 	}
 
-	err = db.createAddress(IP, pool.ID)
+	pool.IPs = append(pool.IPs, IP)
+
+	err = db.createPool(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	addrs, err := db.getPoolAddresses(pool.ID)
-	if err != nil || len(addrs) != 1 {
-		if addrs[0].ID != IP.ID || addrs[0].Address != IP.Address {
-			t.Fatal("address not stored correctly")
-		}
-	}
+	pool.IPs = []types.ExternalIP{}
 
-	err = db.deleteAddress(IP.ID)
+	err = db.updatePool(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	addrs, err = db.getPoolAddresses(pool.ID)
-	if err != nil || len(addrs) != 0 {
+	pools := db.getAllPools()
+	if pools == nil {
+		t.Fatal("pool not stored")
+	}
+
+	p, ok := pools[pool.ID]
+	if !ok || (p.Name != "test") {
+		t.Fatal("pool not stored")
+	}
+
+	addrs := p.IPs
+	if len(addrs) != 0 {
 		t.Fatal("address not deleted")
 	}
 
