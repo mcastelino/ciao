@@ -1434,6 +1434,10 @@ func (ds *Datastore) ClearLog() error {
 	return ds.db.clearLog()
 }
 
+func (ds *Datastore) LogEvent(tenant string, msg string) {
+	ds.db.logEvent(tenant, string(userInfo), msg)
+}
+
 // AddBlockDevice will store information about new BlockData into
 // the datastore.
 func (ds *Datastore) AddBlockDevice(device types.BlockData) error {
