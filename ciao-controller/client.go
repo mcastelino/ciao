@@ -136,6 +136,23 @@ func (client *ssntpClient) EventNotify(event ssntp.Event, frame *ssntp.Frame) {
 		glog.Infof("Node %s disconnected", nodeDisconnected.Disconnected.NodeUUID)
 		client.ctl.ds.DeleteNode(nodeDisconnected.Disconnected.NodeUUID)
 
+	case ssntp.PublicIPAssigned:
+		var event payloads.EventPublicIPAssigned
+		err := yaml.Unmarshal(payload, event)
+		if err != nil {
+			glog.Warning(err)
+			return
+		}
+
+		i, err := client.ctl.ds.GetInstance(event.AssignedIP.InstanceUUID)
+		if err != nil {
+			glog.Warning(err)
+			return
+		}
+
+		msg := fmt.Sprintf("Mapped %s to %s", event.AssignedIP.PublicIP, event.AssignedIP.PrivateIP)
+		client.ctl.ds.LogEvent(i.TenantID, msg)
+
 	}
 	glog.V(1).Info(string(payload))
 }
