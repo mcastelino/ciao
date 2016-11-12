@@ -539,6 +539,9 @@ var (
 
 	// ErrPoolEmpty is returned when a pool has no free IPs
 	ErrPoolEmpty = errors.New("Pool has no Free IPs")
+
+	// ErrDuplicatePoolName is returned when a duplicate pool name is used
+	ErrDuplicatePoolName = errors.New("Pool by that name already exists")
 )
 
 // Link provides a url and relationship for a resource.

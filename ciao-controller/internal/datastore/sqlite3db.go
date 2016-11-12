@@ -564,10 +564,11 @@ func (d poolData) Populate() error {
 func (d poolData) Init() error {
 	cmd := `CREATE TABLE IF NOT EXISTS pools
 		(
-			id varchar(32) primary key,
+			id varchar(32),
 			name string,
 			free int,
-			total int
+			total int,
+			PRIMARY KEY(id, name)
 		);`
 
 	return d.ds.exec(d.db, cmd)

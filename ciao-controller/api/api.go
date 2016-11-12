@@ -74,7 +74,8 @@ func errorResponse(err error) Response {
 		types.ErrPoolNotEmpty,
 		types.ErrInvalidPoolAddress,
 		types.ErrBadRequest,
-		types.ErrPoolEmpty:
+		types.ErrPoolEmpty,
+		types.ErrDuplicatePoolName:
 		return Response{http.StatusForbidden, nil}
 
 	default:

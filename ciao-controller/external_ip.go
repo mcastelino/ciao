@@ -89,6 +89,17 @@ func (c *controller) makeMappedIPLinks(IP *types.MappedIP, tenant *string) {
 }
 
 func (c *controller) AddPool(name string, subnet *string, ips []string) (types.Pool, error) {
+	pools, err := c.ds.GetPools()
+	if err != nil {
+		return types.Pool{}, err
+	}
+
+	for _, p := range pools {
+		if p.Name == name {
+			return types.Pool{}, types.ErrDuplicatePoolName
+		}
+	}
+
 	pool := types.Pool{
 		ID:   uuid.Generate().String(),
 		Name: name,
@@ -127,7 +138,7 @@ func (c *controller) AddPool(name string, subnet *string, ips []string) (types.P
 		pool.Free = pool.TotalIPs
 	}
 
-	err := c.ds.AddPool(pool)
+	err = c.ds.AddPool(pool)
 
 	return pool, err
 }
