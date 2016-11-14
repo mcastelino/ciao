@@ -1587,6 +1587,105 @@ func TestAddPoolSubnet(t *testing.T) {
 
 }
 
+func TestAddPoolAddress(t *testing.T) {
+	address := "192.168.1.1"
+
+	testAddPool(t, "addaddress", nil, []string{})
+
+	pools, err := ctl.ListPools()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(pools) < 1 {
+		t.Fatal("Unable to retrieve pools")
+	}
+
+	for _, pool := range pools {
+		if pool.Name == "addaddress" {
+			err := ctl.AddAddress(pool.ID, nil, []string{address})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			p1, err := ctl.ShowPool(pool.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// we should have a our subnet.
+			if p1.IPs[0].Address != address {
+				t.Fatalf("expected %s address got %s", address, p1.IPs[0].Address)
+			}
+
+			err = ctl.DeletePool(pool.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+	}
+
+}
+
+func TestRemovePoolSubnet(t *testing.T) {
+	subnet := "192.168.0.0/24"
+	address := "192.168.1.1"
+
+	testAddPool(t, "addsubnet", &subnet, []string{})
+
+	pools, err := ctl.ListPools()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var pool types.Pool
+
+	for _, pool = range pools {
+		if pool.Name == "addsubnet" {
+			// make sure the subnet is there.
+			for _, sub := range pool.Subnets {
+				if sub.CIDR == subnet {
+					err := ctl.RemoveAddress(pool.ID, &sub.ID, nil)
+					if err != nil {
+						t.Fatalf("%s: %v\n", err, pool.Subnets)
+					}
+				}
+			}
+		}
+		break
+	}
+
+	p1, err := ctl.ShowPool(pool.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(p1.Subnets) != 0 || p1.TotalIPs != 0 || p1.Free != 0 {
+		t.Fatal("subnet not deleted")
+	}
+
+	err = ctl.AddAddress(pool.ID, nil, []string{address})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p1, err = ctl.ShowPool(pool.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = ctl.RemoveAddress(pool.ID, nil, &p1.IPs[0].ID)
+	if err != nil {
+		t.Fatalf("%s: %v\n", err, pool.IPs)
+	}
+
+	err = ctl.RemoveAddress(pool.ID, nil, nil)
+	if err != types.ErrBadRequest {
+		t.Fatal("invalid remove address request allowed")
+	}
+}
+
 func TestMapAddress(t *testing.T) {
 	var reason payloads.StartFailureReason
 
@@ -1635,6 +1734,76 @@ func TestMapAddress(t *testing.T) {
 				fmt.Printf("%v", pool)
 				t.Fatal("Pool Free not decremented")
 			}
+		}
+	}
+}
+
+func TestMapAddressNoPool(t *testing.T) {
+	var reason payloads.StartFailureReason
+
+	client, instances := testStartWorkload(t, 1, false, reason)
+	defer client.Shutdown()
+
+	ips := []string{"10.10.0.2"}
+	poolName := "testmapnopool"
+
+	testAddPool(t, poolName, nil, ips)
+
+	err := ctl.MapAddress(nil, instances[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pools, err := ctl.ListPools()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(pools) < 1 {
+		t.Fatal("Unable to retrieve pools")
+	}
+
+	for _, pool := range pools {
+		if pool.Name == "testmapnopool" {
+			if pool.Free != 0 {
+				fmt.Printf("%v", pool)
+				t.Fatal("Pool Free not decremented")
+			}
+		}
+	}
+
+	mappedIPs := ctl.ListMappedAddresses(&instances[0].TenantID)
+	if len(mappedIPs) != 1 {
+		t.Fatal("mapped IP not in list")
+	}
+}
+
+func TestUnMapAddress(t *testing.T) {
+	address := "10.10.0.3"
+	var reason payloads.StartFailureReason
+
+	client, instances := testStartWorkload(t, 1, false, reason)
+	defer client.Shutdown()
+
+	ips := []string{address}
+	poolName := "testunmap"
+
+	testAddPool(t, poolName, nil, ips)
+
+	err := ctl.MapAddress(nil, instances[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = ctl.UnMapAddress(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mappedIPs := ctl.ListMappedAddresses(nil)
+	for _, m := range mappedIPs {
+		if m.ExternalIP == address {
+			t.Fatal("address not unmapped")
 		}
 	}
 }
