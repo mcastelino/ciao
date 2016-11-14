@@ -146,6 +146,7 @@ func main() {
 
 	volumeAPIPort = clusterConfig.Configure.Controller.VolumePort
 	computeAPIPort = clusterConfig.Configure.Controller.ComputePort
+	controllerAPIPort = clusterConfig.Configure.Controller.CiaoPort
 	httpsCAcert = clusterConfig.Configure.Controller.HTTPSCACert
 	httpsKey = clusterConfig.Configure.Controller.HTTPSKey
 	identityURL = clusterConfig.Configure.IdentityService.URL
