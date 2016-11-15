@@ -1406,7 +1406,7 @@ func testAddPool(t *testing.T, name string, subnet *string, ips []string) {
 		}
 
 		ones, bits := ipNet.Mask.Size()
-		expected.TotalIPs = (1 << uint32(bits-ones))
+		expected.TotalIPs = (1 << uint32(bits-ones)) - 2
 		expected.Free = expected.TotalIPs
 	} else if len(ips) > 0 {
 		// not an easy way to check this, so we're going to
@@ -1662,6 +1662,7 @@ func TestRemovePoolSubnet(t *testing.T) {
 	}
 
 	if len(p1.Subnets) != 0 || p1.TotalIPs != 0 || p1.Free != 0 {
+		fmt.Printf("pool %v\n", p1)
 		t.Fatal("subnet not deleted")
 	}
 

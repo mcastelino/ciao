@@ -117,7 +117,10 @@ func (c *controller) AddPool(name string, subnet *string, ips []string) (types.P
 		}
 
 		ones, bits := ipNet.Mask.Size()
-		pool.TotalIPs = (1 << uint32(bits-ones))
+
+		// subtract out gateway and broadcast
+		TotalIPs := (1 << uint32(bits-ones)) - 2
+		pool.TotalIPs = TotalIPs
 		pool.Free = pool.TotalIPs
 		pool.Subnets = append(pool.Subnets, sub)
 	} else if len(ips) > 0 {

@@ -1904,7 +1904,9 @@ func (ds *Datastore) AddExternalSubnet(poolID string, subnet string) error {
 	}
 
 	ones, bits := ipNet.Mask.Size()
-	newIPs := (1 << uint32(bits-ones))
+
+	// deduct gateway and broadcast
+	newIPs := (1 << uint32(bits-ones)) - 2
 	p.TotalIPs += newIPs
 	p.Free += newIPs
 	p.Subnets = append(p.Subnets, sub)
@@ -1997,7 +1999,7 @@ func (ds *Datastore) DeleteSubnet(poolID string, subnetID string) error {
 		}
 
 		ones, bits := ipNet.Mask.Size()
-		numIPs := (1 << uint32(bits-ones))
+		numIPs := (1 << uint32(bits-ones)) - 2
 		p.TotalIPs -= numIPs
 		p.Free -= numIPs
 		p.Subnets = append(p.Subnets[:i], p.Subnets[i+1:]...)
@@ -2125,8 +2127,13 @@ func (ds *Datastore) MapExternalIP(poolID string, instanceID string) (types.Mapp
 			return m, err
 		}
 
+		initIP := IP.Mask(ipNet.Mask)
+
+		// skip gateway
+		incrementIP(initIP)
+
 		// check each address in this subnet
-		for IP := IP.Mask(ipNet.Mask); ipNet.Contains(IP); incrementIP(IP) {
+		for IP := initIP; ipNet.Contains(IP); incrementIP(IP) {
 			_, ok := ds.mappedIPs[IP.String()]
 			if !ok {
 				m.ID = uuid.Generate().String()
