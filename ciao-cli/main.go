@@ -54,7 +54,6 @@ func (c *command) run(args []string) error {
 		c.usage(cmdName)
 	}
 	args = subCmd.parseArgs(args[2:])
-	prepareForCommand()
 	return subCmd.run(args)
 }
 
@@ -445,6 +444,7 @@ func main() {
 
 	getCiaoEnvVariables()
 	checkCompulsoryOptions()
+	prepareForCommand()
 
 	// Print usage if no arguments are given
 	args := flag.Args()

@@ -32,19 +32,44 @@ import (
 )
 
 const (
+	externalSubnetDesc = `struct {
+	ID	string			// ID of the external subnet
+	CIDR	string			// CIDR representation of the subnet
+}`
+	externalIPDesc = `struct {
+	ID	string			// ID of the external IP
+	Address	string			// the IPv4 Address
+}`
+	poolTemplateDescPriv = `struct {
+	ID       string                 // ID of the pool
+	Name     string                 // Name of the pool
+	TotalIPs int                    // Total IPs in pool
+	Free	 int                    // Total Free IPs in pool
+}`
 	poolTemplateDesc = `struct {
-	ID       string                               // ID of the pool
-	Name     string                               // Name of the pool
-	TotalIPs int                                  // Total IPs in pool
-	Free	 int                                  // Total Free IPs in pool
+	Name     string                 // Name of the pool
 }`
 	poolShowTemplateDesc = `struct {
-	ID	string					// ID of the pool
-	Name	string					// name of the pool
-	Free	*int					// Total free IPs in pool
-	TotalIPs *int					// Total IPs in pool
-	Subnets []ExternalSubnet			// Subnets in this pool
-	IPs	[]ExternalIP				// Individual IPs in this pool
+	ID	string			// ID of the pool
+	Name	string			// name of the pool
+	Free	int			// Total free IPs in pool
+	TotalIPs int			// Total IPs in pool
+	Subnets []ExternalSubnet	// Subnets in this pool
+	IPs	[]ExternalIP		// Individual IPs in this pool
+}`
+	externalIPTemplatePriv = `struct {
+	ID		string		// ID of the mapped IP
+	ExternalIP 	string		// External IP address
+	InternalIP	string		// Internal IP address
+	InstanceID	string		// ID of the instance that is mapped
+	TenantID	string		// ID of the tenant
+	PoolID		string		// ID of the allocation pool
+	PoolName	string		// Name of the allocation pool
+}`
+	externalIPTemplateShort = `struct {
+	ID		string		// ID of the mapped IP
+	ExternalIP 	string		// External IP address
+	InternalIP	string		// Internal IP address
 }`
 )
 
@@ -163,7 +188,8 @@ func (cmd *externalIPMapCommand) run(args []string) error {
 }
 
 type externalIPListCommand struct {
-	Flag flag.FlagSet
+	Flag     flag.FlagSet
+	template string
 }
 
 func (cmd *externalIPListCommand) usage(...string) {
@@ -175,10 +201,26 @@ The list flags are:
 
 `)
 	cmd.Flag.PrintDefaults()
+
+	if checkPrivilege() {
+		fmt.Fprintf(os.Stderr, `
+The template passed to the -f option operates on a
+
+[]%s
+`, externalIPTemplatePriv)
+	} else {
+		fmt.Fprintf(os.Stderr, `
+The template passed to the -f option operates on a
+
+[]%s
+`, externalIPTemplateShort)
+	}
+
 	os.Exit(2)
 }
 
 func (cmd *externalIPListCommand) parseArgs(args []string) []string {
+	cmd.Flag.StringVar(&cmd.template, "f", "", "Template used to format output")
 	cmd.Flag.Usage = func() { cmd.usage() }
 	cmd.Flag.Parse(args)
 	return cmd.Flag.Args()
@@ -204,6 +246,11 @@ func (cmd *externalIPListCommand) run(args []string) error {
 	err = unmarshalHTTPResponse(resp, &IPs)
 	if err != nil {
 		fatalf(err.Error())
+	}
+
+	if cmd.template != "" {
+		return outputToTemplate("external-ip-list", cmd.template,
+			&IPs)
 	}
 
 	w := new(tabwriter.Writer)
@@ -443,11 +490,19 @@ The list flags are:
 
 `)
 	cmd.Flag.PrintDefaults()
-	fmt.Fprintf(os.Stderr, `
+	if checkPrivilege() {
+		fmt.Fprintf(os.Stderr, `
+The template passed to the -f option operates on a
+
+[]%s
+`, poolTemplateDescPriv)
+	} else {
+		fmt.Fprintf(os.Stderr, `
 The template passed to the -f option operates on a
 
 []%s
 `, poolTemplateDesc)
+	}
 
 	os.Exit(2)
 }
@@ -484,7 +539,7 @@ func (cmd *poolListCommand) run(args []string) error {
 
 	if cmd.template != "" {
 		return outputToTemplate("pool-list", cmd.template,
-			&pools)
+			&pools.Pools)
 	}
 
 	w := new(tabwriter.Writer)
@@ -531,8 +586,19 @@ The show flags are:
 	fmt.Fprintf(os.Stderr, `
 The template passed to the -f option operates on a
 
-[]%s
+%s
 `, poolShowTemplateDesc)
+	fmt.Fprintf(os.Stderr, `
+The externalSubnets are described by
+
+%s
+`, externalSubnetDesc)
+
+	fmt.Fprintf(os.Stderr, `
+The externalIPs are described by
+
+%s
+`, externalIPDesc)
 
 	os.Exit(2)
 }
