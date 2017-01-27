@@ -69,7 +69,7 @@ func (d CephDriver) CreateBlockDevice(volumeUUID string, imagePath string, size 
 		cmd = exec.Command("qemu-img", "convert", "-O", "rbd", imagePath, rbdStr)
 	} else {
 		// create an empty volume
-		cmd = exec.Command("rbd", "--id", d.ID, "--image-feature", "layering", "create", "--size", strconv.Itoa(size)+"G", volumeUUID)
+		cmd = exec.Command("rbd", "--id", d.ID, "--image-format", "2", "--image-feature", "layering", "create", "--size", strconv.Itoa(size)+"G", volumeUUID)
 	}
 
 	out, err := cmd.CombinedOutput()
