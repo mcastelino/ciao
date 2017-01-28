@@ -64,9 +64,17 @@ fi
 echo -e "\nMounting image: $image"
 tmpdir=$(mktemp -d)
 
-loop=`sudo losetup -f --show -P $image`
-sudo udevadm settle
-sudo mount ${loop}p$partition "$tmpdir"
+if [ -f "/usr/bin/partx" ]
+then
+    loop="`sudo kpartx -av $image | grep -m 1 -o "/dev/loop[0-9]*" | head -1`"
+    mapped_loop="/dev/mapper/`echo $loop | cut -d '/' -f3 `"
+    sudo mount ${mapped_loop}p$partition ${tmpdir}
+else
+    loop=`sudo losetup -f --show -P $image`
+    sudo udevadm settle
+    sudo mount ${loop}p$partition "$tmpdir"
+fi
+
 
 # simplistic sanity check...most any linux image rootfs successfully mounted
 # will have a /usr directory
